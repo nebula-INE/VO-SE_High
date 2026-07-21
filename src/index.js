@@ -9,55 +9,65 @@ import { epoxyPath } from "@mercuryworkshop/epoxy-transport";
 import { baremuxPath } from "@mercuryworkshop/bare-mux/node";
 
 const app = express();
-// Load our publicPath first and prioritize it over UV.
+
+// 1. 静的ファイルとUV関連のパス設定
 app.use(express.static("./public"));
-// Load vendor files last.
-// The vendor's uv.config.js won't conflict with our uv.config.js inside the publicPath directory.
 app.use("/uv/", express.static(uvPath));
 app.use("/epoxy/", express.static(epoxyPath));
 app.use("/baremux/", express.static(baremuxPath));
 
-// Error for everything else
+// 404エラーハンドリング
 app.use((req, res) => {
 	res.status(404);
-	res.sendFile("./public/404.html");
+	// Vercel環境用に絶対パスで指定
+	res.sendFile(join(process.cwd(), "./public/404.html"));
 });
 
+// 2. HTTPサーバーの作成
 const server = createServer();
 
 server.on("request", (req, res) => {
+	// サイトの再現に必要なセキュリティヘッダーを付与
 	res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
 	res.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
 	app(req, res);
 });
+
+// Vercelのサーバーレス環境ではWebSocket(Wisp)のupgradeイベントが制限される場合があるため、
+// 通常のHTTPリクエストとしてもWispを処理できるようにルーティングを補強
+app.use("/wisp/", (req, res) => {
+	if (req.method === "GET" && req.headers.upgrade === "websocket") {
+		// WebSocketアップグレード要求は通常通り処理
+		return;
+	}
+	res.status(200).send("Wisp server is running (HTTP Gateway)");
+});
+
 server.on("upgrade", (req, socket, head) => {
-	if (req.url.endsWith("/wisp/")) {
+	if (req.url.endsWith("/wisp/") || req.url.includes("/wisp/?")) {
 		wisp.routeRequest(req, socket, head);
 		return;
 	} 
 	socket.end();
 });
 
-let port = parseInt(process.env.PORT || "");
+// 3. 【重要】Vercel用にエクスポート処理を追加
+// Vercelは自動でポートを開くため、自前で server.listen() を呼ぶとエラーになります。
+// 代わりに、作成したサーバーまたはExpressアプリを外部に公開（エクスポート）します。
+export default server;
 
-if (isNaN(port)) port = 8080;
+// ローカル環境（または通常のサーバー環境）でのみ listen を実行する仕様に変更
+if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
+	let port = parseInt(process.env.PORT || "");
+	if (isNaN(port)) port = 8080;
 
-server.on("listening", () => {
-	const address = server.address();
+	server.listen({ port }, () => {
+		const address = server.address();
+		console.log(`Listening on: http://localhost:${address.port}`);
+	});
+}
 
-	// by default we are listening on 0.0.0.0 (every interface)
-	// we just need to list a few
-	console.log("Listening on:");
-	console.log(`\thttp://localhost:${address.port}`);
-	console.log(`\thttp://${hostname()}:${address.port}`);
-	console.log(
-		`\thttp://${
-			address.family === "IPv6" ? `[${address.address}]` : address.address
-		}:${address.port}`
-	);
-});
-
-// https://expressjs.com/en/advanced/healthcheck-graceful-shutdown.html
+// 終了処理
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
@@ -66,7 +76,3 @@ function shutdown() {
 	server.close();
 	process.exit(0);
 }
-
-server.listen({
-	port,
-});
