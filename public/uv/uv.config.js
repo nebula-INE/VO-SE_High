@@ -9,4 +9,7 @@ self.__uv$config = {
 	bundle: "/uv/uv.bundle.js",
 	config: "/uv/uv.config.js",
 	sw: "/uv/uv.sw.js",
+	
+	// ★ここにVercelの壁を壊すための外部Wispサーバーを指定します
+	wisp: "wss://wisp.mercurywork.shop/",
 };
